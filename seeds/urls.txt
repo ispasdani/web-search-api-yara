@@ -1,0 +1,15 @@
+# Seed URLs for Yara crawler
+# One URL per line. Lines starting with # are ignored.
+# The crawler will follow links outward from each URL (same domain only).
+# Add or remove URLs here to control which sites get indexed.
+
+# ── Developer docs ────────────────────────────────────────────────────────────
+https://nodejs.org/en/docs
+https://developer.mozilla.org/en-US/docs/Web
+https://www.typescriptlang.org/docs
+
+# ── More seeds to add later ───────────────────────────────────────────────────
+# https://docs.python.org/3
+# https://react.dev/learn
+# https://nextjs.org/docs
+# https://expressjs.com
