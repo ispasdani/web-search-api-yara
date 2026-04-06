@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "crawl": "tsx --env-file=.env src/crawler.ts",
+    "crawl": "tsx --env-file=.env.local src/crawler.ts",
     "convex:dev": "npx convex dev"
   },
   "dependencies": {
