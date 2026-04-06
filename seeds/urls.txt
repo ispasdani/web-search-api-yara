@@ -5,10 +5,19 @@
 
 # ── Romanian legal websites ───────────────────────────────────────────────────
 https://legislatie.just.ro
+https://legislatie.just.ro/Public/DetaliiDocument/109855
+https://legislatie.just.ro/Public/DetaliiDocument/120611
+https://www.just.ro/wp-content/uploads/2021/11/noul-cod-penal-precizari_01022013.pdf
+https://eur-lex.europa.eu/search.html?CASE_LAW_JURE_SUMMARY=false&lang=en&SUBDOM_INIT=NAT_CASE_LAW&DTS_DOM=NATIONAL_LAW&CASE_LAW_SUMMARY=false&type=advanced&DTS_SUBDOM=NAT_CASE_LAW&qid=1643210497336&NA_CODED=ROU
+https://legislatie.just.ro/Public/DetaliiDocument/109884
+https://legislatie.just.ro/Public/DetaliiDocument/140271
+https://www.just.ro/informatii-de-interes-public/protectia-datelor-cu-caracter-personal/
 https://portal.just.ro
 https://www.ccr.ro
 https://www.csm1909.ro
 https://www.juridice.ro
+https://www.juridice.ro/drept-civil
+https://www.juridice.ro/drept-penal
 https://www.avocatnet.ro
 https://www.dreptonline.ro
 https://lege5.ro
