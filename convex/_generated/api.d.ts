@@ -8,6 +8,8 @@
  * @module
  */
 
+import type * as crawler from "../crawler.js";
+import type * as crons from "../crons.js";
 import type * as http from "../http.js";
 import type * as pages from "../pages.js";
 
@@ -18,6 +20,8 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  crawler: typeof crawler;
+  crons: typeof crons;
   http: typeof http;
   pages: typeof pages;
 }>;

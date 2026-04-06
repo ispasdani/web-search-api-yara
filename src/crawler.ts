@@ -1,21 +1,22 @@
-import { CheerioCrawler, Configuration, RequestQueue, Log } from "crawlee";
+import { CheerioCrawler, PlaywrightCrawler, Configuration } from "crawlee";
 import { ConvexHttpClient } from "convex/browser";
 import { readFileSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import { api } from "../convex/_generated/api.js";
-import { fetchHtml, extractPage } from "./extractor.js";
+import { extractPage, detectSPA } from "./extractor.js";
 import { pLimit } from "./utils/pLimit.js";
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const CONVEX_URL       = process.env.CONVEX_URL!;
-const MAX_PAGES        = parseInt(process.env.CRAWL_MAX_PAGES   ?? "500");
-const MAX_DEPTH        = parseInt(process.env.CRAWL_MAX_DEPTH   ?? "3");
-const CONCURRENCY      = parseInt(process.env.CRAWL_CONCURRENCY ?? "5");
-const CONTENT_MAX_CHARS = parseInt(process.env.CONTENT_MAX_CHARS ?? "8000");
+const CONVEX_URL        = process.env.CONVEX_URL!;
+const MAX_PAGES         = parseInt(process.env.CRAWL_MAX_PAGES          ?? "500");
+const MAX_DEPTH         = parseInt(process.env.CRAWL_MAX_DEPTH          ?? "3");
+const CONCURRENCY       = parseInt(process.env.CRAWL_CONCURRENCY        ?? "5");
+const CONTENT_MAX_CHARS = parseInt(process.env.CONTENT_MAX_CHARS        ?? "8000");
+const PW_TIMEOUT_MS     = parseInt(process.env.CRAWL_PLAYWRIGHT_TIMEOUT ?? "15000");
 
 if (!CONVEX_URL) {
-  console.error("❌  CONVEX_URL is not set. Copy .env.example → .env and fill it in.");
+  console.error("❌  CONVEX_URL is not set. Copy .env.example → .env.local and fill it in.");
   process.exit(1);
 }
 
@@ -30,6 +31,10 @@ let indexed   = 0;
 let skipped   = 0;
 let failed    = 0;
 let total     = 0;
+let spaCount  = 0;
+
+// URLs detected as SPAs during the Cheerio pass — queued for the Playwright pass
+const spaUrls = new Set<string>();
 
 // ── Push a single page to Convex ─────────────────────────────────────────────
 async function pushToConvex(page: Awaited<ReturnType<typeof extractPage>>) {
@@ -38,7 +43,7 @@ async function pushToConvex(page: Awaited<ReturnType<typeof extractPage>>) {
     await convex.mutation(api.pages.upsertPage, page);
     indexed++;
     if (indexed % 10 === 0) {
-      console.log(`📦  Indexed: ${indexed}  Skipped: ${skipped}  Failed: ${failed}  Queued: ${total}`);
+      console.log(`📦  Indexed: ${indexed}  Skipped: ${skipped}  Failed: ${failed}  SPA queued: ${spaUrls.size}`);
     }
   } catch (err) {
     failed++;
@@ -63,45 +68,43 @@ console.log(`🌱  Seeding crawler with ${seedUrls.length} URL(s):`);
 seedUrls.forEach((u) => console.log(`    ${u}`));
 console.log(`📊  Limits: maxPages=${MAX_PAGES}  maxDepth=${MAX_DEPTH}  concurrency=${CONCURRENCY}\n`);
 
-// ── Crawler ───────────────────────────────────────────────────────────────────
+// ── Pass 1: CheerioCrawler (fast, no browser) ─────────────────────────────────
 const limit = pLimit(CONCURRENCY);
 
-const crawler = new CheerioCrawler({
-  maxRequestsPerCrawl: MAX_PAGES,
-  maxConcurrency:      CONCURRENCY,
+const cheerioCrawler = new CheerioCrawler({
+  maxRequestsPerCrawl:      MAX_PAGES,
+  maxConcurrency:           CONCURRENCY,
   requestHandlerTimeoutSecs: 30,
+  minConcurrency:            1,
 
-  // Crawlee will respect robots.txt automatically.
-  // We also add a small per-domain delay to be polite.
-  minConcurrency: 1,
-
-  async requestHandler({ request, $, enqueueLinks, log }) {
+  async requestHandler({ request, $, enqueueLinks }) {
     total++;
     const url   = request.loadedUrl ?? request.url;
     const depth = (request.userData.depth as number | undefined) ?? 0;
+    const html  = $.html();
 
-    log.debug(`[depth=${depth}] ${url}`);
-
-    // ── Extract text directly from Cheerio's already-parsed HTML ─────────────
-    // We re-use the raw HTML string for our extractor so Readability can parse it.
-    const html = $.html();
+    // Detect SPA — queue for Playwright pass instead of extracting now
+    if (detectSPA(html)) {
+      spaUrls.add(url);
+      spaCount++;
+      return;
+    }
 
     const page = await extractPage(url, html, CONTENT_MAX_CHARS);
 
-    if (!page) {
+    if (!page || page.content.length < 200) {
+      // Content too sparse — also try with Playwright
+      spaUrls.add(url);
       skipped++;
       return;
     }
 
-    // Push to Convex (fire and forget within the concurrency limit)
     limit(() => pushToConvex(page)).catch(() => { failed++; });
 
-    // ── Follow links ──────────────────────────────────────────────────────────
     if (depth < MAX_DEPTH) {
       await enqueueLinks({
-        strategy: "same-domain", // only stay on the same domain
+        strategy: "same-domain",
         transformRequestFunction(req) {
-          // Skip non-HTML resources
           const href = req.url.toLowerCase();
           if (/\.(css|js|png|jpe?g|gif|svg|ico|woff2?|ttf|eot|pdf|zip|gz|mp4|webm)(\?.*)?$/.test(href)) {
             return false;
@@ -119,19 +122,58 @@ const crawler = new CheerioCrawler({
   },
 });
 
-// ── Run ───────────────────────────────────────────────────────────────────────
-console.log("🕷️  Starting crawl...\n");
+console.log("🕷️  Pass 1: CheerioCrawler (static pages)...\n");
 const startedAt = Date.now();
+await cheerioCrawler.run(seedUrls.map((url) => ({ url, userData: { depth: 0 } })));
+await new Promise((r) => setTimeout(r, 1000));
 
-await crawler.run(seedUrls.map((url) => ({ url, userData: { depth: 0 } })));
+// ── Pass 2: PlaywrightCrawler (JS-heavy / SPA pages) ─────────────────────────
+if (spaUrls.size > 0) {
+  console.log(`\n🎭  Pass 2: PlaywrightCrawler for ${spaUrls.size} SPA/JS-heavy page(s)...\n`);
 
-// Wait for any in-flight Convex writes to settle
-await new Promise((r) => setTimeout(r, 2000));
+  const playwrightCrawler = new PlaywrightCrawler({
+    maxConcurrency:            2,  // browsers are heavy — keep concurrency low
+    requestHandlerTimeoutSecs: Math.ceil(PW_TIMEOUT_MS / 1000) + 5,
+    launchContext: {
+      launchOptions: {
+        headless: true,
+        timeout:  PW_TIMEOUT_MS,
+      },
+    },
 
+    async requestHandler({ request, page }) {
+      const url = request.loadedUrl ?? request.url;
+
+      // Wait for the network to settle so JS can finish rendering
+      await page.waitForLoadState("networkidle", { timeout: PW_TIMEOUT_MS });
+
+      const html      = await page.content();
+      const extracted = await extractPage(url, html, CONTENT_MAX_CHARS);
+
+      if (!extracted || extracted.content.length < 100) {
+        skipped++;
+        return;
+      }
+
+      limit(() => pushToConvex(extracted)).catch(() => { failed++; });
+    },
+
+    failedRequestHandler({ request }, err) {
+      failed++;
+      console.warn(`❌  Playwright failed: ${request.url} — ${(err as Error).message}`);
+    },
+  });
+
+  await playwrightCrawler.run([...spaUrls].map((url) => ({ url })));
+  await new Promise((r) => setTimeout(r, 1000));
+}
+
+// ── Done ──────────────────────────────────────────────────────────────────────
 const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
 console.log(`\n✅  Crawl complete in ${elapsed}s`);
-console.log(`    Indexed : ${indexed}`);
-console.log(`    Skipped : ${skipped}  (empty/unchanged pages)`);
-console.log(`    Failed  : ${failed}`);
-console.log(`    Total   : ${total} requests processed`);
+console.log(`    Indexed     : ${indexed}`);
+console.log(`    Skipped     : ${skipped}  (empty/unchanged pages)`);
+console.log(`    SPA (Pass 2): ${spaCount} pages rendered with Playwright`);
+console.log(`    Failed      : ${failed}`);
+console.log(`    Total req   : ${total}`);
 console.log(`\n🔍  Search at: ${CONVEX_URL.replace(".cloud", ".site")}/search?q=your+query`);

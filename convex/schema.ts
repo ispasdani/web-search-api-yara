@@ -13,8 +13,9 @@ export default defineSchema({
     crawledAt:   v.number(), // Unix ms timestamp
     contentHash: v.string(), // SHA-256 of content — used to skip unchanged pages
   })
-    .index("by_url",    ["url"])
-    .index("by_domain", ["domain"])
+    .index("by_url",       ["url"])
+    .index("by_domain",    ["domain"])
+    .index("by_crawledAt", ["crawledAt"])
     .searchIndex("search_content", {
       searchField:  "content",
       filterFields: ["domain", "lang", "contentType"],

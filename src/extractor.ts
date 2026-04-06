@@ -131,6 +131,36 @@ function extractText(url: string, html: string): string {
   }
 }
 
+// ── SPA / JS-heavy page detection ────────────────────────────────────────────
+// Returns true when the page likely needs a headless browser to render its content.
+// Called by the crawler to decide whether to queue a Playwright fallback pass.
+export function detectSPA(html: string): boolean {
+  // Framework markers written into the raw HTML by SSR/hydration
+  const markers = [
+    "__NEXT_DATA__",       // Next.js
+    "data-reactroot",      // React (legacy)
+    "data-react-helmet",   // React Helmet
+    "ng-version",          // Angular
+    "__NUXT__",            // Nuxt.js
+    "__vue_root",          // Vue 3
+    "data-server-rendered", // Vue SSR (still JS-driven)
+    "gatsby-focus-wrapper", // Gatsby
+  ];
+  if (markers.some((m) => html.includes(m))) return true;
+
+  // Structural heuristic: body visible text < 5% of total HTML size
+  // (page is mostly script/style tags with minimal pre-rendered content)
+  if (html.length > 5_000) {
+    const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+    if (bodyMatch) {
+      const bodyText = bodyMatch[1].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+      if (bodyText.length / html.length < 0.05) return true;
+    }
+  }
+
+  return false;
+}
+
 // ── Title extraction ──────────────────────────────────────────────────────────
 function extractTitle(html: string): string {
   // Try og:title first (usually cleaner)

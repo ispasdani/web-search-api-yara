@@ -1,4 +1,4 @@
-import { mutation, query } from "./_generated/server";
+import { mutation, query, internalQuery, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 
 // ── Upsert a crawled page ─────────────────────────────────────────────────────
@@ -97,6 +97,52 @@ export const searchPages = query({
       page,
       limit,
     };
+  },
+});
+
+// ── Internal: stale pages for re-crawl ───────────────────────────────────────
+// Returns pages whose crawledAt is older than `olderThanMs` (unix ms).
+// Used by the daily cron re-crawl action.
+export const getStalePagesForRecrawl = internalQuery({
+  args: {
+    olderThanMs: v.number(),
+    limit:       v.optional(v.number()),
+  },
+  handler: async (ctx, { olderThanMs, limit }) => {
+    return ctx.db
+      .query("pages")
+      .withIndex("by_crawledAt", (q) => q.lt("crawledAt", olderThanMs))
+      .take(limit ?? 50);
+  },
+});
+
+// ── Internal: upsert for use inside Convex actions ────────────────────────────
+// Actions cannot call public mutations via `api.*`; they use `internal.*`.
+export const upsertPageInternal = internalMutation({
+  args: {
+    url:         v.string(),
+    domain:      v.string(),
+    title:       v.string(),
+    content:     v.string(),
+    snippet:     v.string(),
+    lang:        v.string(),
+    contentType: v.string(),
+    crawledAt:   v.number(),
+    contentHash: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("pages")
+      .withIndex("by_url", (q) => q.eq("url", args.url))
+      .first();
+
+    if (existing) {
+      if (existing.contentHash === args.contentHash) return existing._id;
+      await ctx.db.patch(existing._id, args);
+      return existing._id;
+    }
+
+    return await ctx.db.insert("pages", args);
   },
 });
 
